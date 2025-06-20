@@ -3,22 +3,47 @@ provider "aws" {
   region = "ap-northeast-1"
 }
 
-resource "aws_instance" "example" {
-  ami = "ami-0bb2c57f7cfafb1cb"
+resource "aws_launch_template" "example" {
+  name_prefix   = "example-"
+  image_id      = "ami-0bb2c57f7cfafb1cb"
   instance_type = "t2.micro"
   vpc_security_group_ids = [aws_security_group.instance.id]
 
-  user_data = <<-EOF
-	      #!/bin/bash
+  user_data = base64encode(<<-EOF
+              #!/bin/bash
               echo "Hello, World" > index.html
-	      nohup python3 -m http.server ${var.server_port} &
-	      EOF
+              nohup python3 -m http.server ${var.server_port} &
+              EOF
+  )
 
-  user_data_replace_on_change = true
+  tag_specifications {
+    resource_type = "instance"
 
-  tags = {
-    Name = "terraform-example"
+    tags = {
+      Name = "terraform-asg-instance"
+    }
   }
+}
+
+resource "aws_autoscaling_group" "example" {
+  desired_capacity     = 2
+  max_size             = 3
+  min_size             = 1
+  vpc_zone_identifier  = data.aws_subnets.default.ids
+  launch_template {
+    id      = aws_launch_template.example.id
+    version = "$Latest"
+  }
+
+  tag {
+    key                 = "Name"
+    value               = "terraform-asg-instance"
+    propagate_at_launch = true
+  }
+
+  health_check_type         = "EC2"
+  force_delete              = true
+  wait_for_capacity_timeout = "0"
 }
 
 resource "aws_security_group" "instance" {
@@ -38,7 +63,14 @@ variable "server_port" {
   default = 8080
 }
 
-output "public_ip" {
-  value = aws_instance.example.public_ip
-  description = "The public IP address of the web server"
+data "aws_subnets" "default" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
 }
+
+data "aws_vpc" "default" {
+  default = true
+}
+
